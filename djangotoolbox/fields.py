@@ -158,11 +158,16 @@ class AbstractIterableField(models.Field):
             raise ValidationError("Value of type %r is not iterable." %
                                   type(values))
 
-    def formfield(self, **kwargs):
-        raise NotImplementedError("No form field implemented for %r." %
-                                  type(self))
+   # def formfield(self, **kwargs):
+   #     raise NotImplementedError("No form field implemented for %r." %
+   #                               type(self))
 
-
+    def formfield(self, **kwargs): 
+        from django.forms import CharField 
+        defaults = {'form_class': CharField} 
+        defaults.update(kwargs) 
+        return super(AbstractIterableField, self).formfield(**defaults) 
+        
 class ListField(AbstractIterableField):
     """
     Field representing a Python ``list``.
@@ -192,7 +197,7 @@ class ListField(AbstractIterableField):
             value.sort(key=self.ordering)
         return super(ListField, self).pre_save(model_instance, add)
 
-    def formfield(self, **kwarsg): 
+    def formfield(self, **kwargs): 
         from django.forms import CharField 
         defaults = {'form_class': CharField} 
         defaults.update(kwargs) 
