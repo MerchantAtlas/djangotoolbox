@@ -192,7 +192,12 @@ class ListField(AbstractIterableField):
             value.sort(key=self.ordering)
         return super(ListField, self).pre_save(model_instance, add)
 
-
+    def formfield(self, **kwarsg): 
+        from django.forms import CharField 
+        defaults = {'form_class': CharField} 
+        defaults.update(kwargs) 
+        return super(ListField, self).formfield(**defaults) 
+        
 class SetField(AbstractIterableField):
     """
     Field representing a Python ``set``.
