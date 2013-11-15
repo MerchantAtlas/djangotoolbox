@@ -4,12 +4,14 @@ from django.core.exceptions import ValidationError
 from django.utils.importlib import import_module
 from django.db import models
 from django.db.models.fields.subclassing import Creator
+from django.db.models.query_utils import (DeferredAttribute,
+                                          deferred_class_factory)
 from django.db.utils import IntegrityError
 from django.db.models.fields.related import add_lazy_relation
 
 
 __all__ = ('RawField', 'ListField', 'SetField', 'DictField',
-           'EmbeddedModelField', 'BlobField')
+           'EmbeddedModelField', 'PartialEmbeddedModelField', 'BlobField')
 
 
 EMPTY_ITER = ()
@@ -85,16 +87,17 @@ class AbstractIterableField(models.Field):
         if issubclass(item_metaclass, models.SubfieldBase):
             setattr(cls, self.name, Creator(self))
 
-        if isinstance(self.item_field, models.ForeignKey) and isinstance(self.item_field.rel.to, basestring):
-            """
-            If rel.to is a string because the actual class is not yet defined, look up the
-            actual class later.  Refer to django.models.fields.related.RelatedField.contribute_to_class.
-            """
+        if isinstance(self.item_field, models.ForeignKey) and \
+                isinstance(self.item_field.rel.to, basestring):
+            # If rel.to is a string because the actual class is not yet
+            # defined, look up the actual class later.  Refer to
+            # django.models.fields.related.RelatedField.contribute_to_class.
             def _resolve_lookup(_, resolved_model, __):
                 self.item_field.rel.to = resolved_model
                 self.item_field.do_related_class(self, cls)
 
-            add_lazy_relation(cls, self, self.item_field.rel.to, _resolve_lookup)
+            add_lazy_relation(cls, self, self.item_field.rel.to,
+                              _resolve_lookup)
 
     def _map(self, function, iterable, *args, **kwargs):
         """
@@ -110,7 +113,9 @@ class AbstractIterableField(models.Field):
         """
         Passes value items through item_field's to_python.
         """
-        if value is None:
+        if isinstance(value, DeferredAttribute):
+            return value
+        elif value is None:
             return None
         return self._map(self.item_field.to_python, value)
 
@@ -203,7 +208,8 @@ class ListField(AbstractIterableField):
         defaults = {'form_class': CharField} 
         defaults.update(kwargs) 
         return super(ListField, self).formfield(**defaults) 
-        
+
+
 class SetField(AbstractIterableField):
     """
     Field representing a Python ``set``.
@@ -413,6 +419,89 @@ class EmbeddedModelField(models.Field):
         if hasattr(value, 'as_lookup_value'):
             value = value.as_lookup_value(self, lookup_type, connection)
         return value
+
+
+class PartialEmbeddedModelField(EmbeddedModelField):
+    """
+    Field that allows you to partially embed a model instance. Any fields
+    that are not embedded will be queried on request.
+
+    :param include_fields: (optional) A list of field names that are to be
+                            included
+    :param exclude_fields: (optional) A list of field names that are to be
+                            excluded. Exclude takes precedence over include.
+    :param embedded_model: (optional) The model class of instances we
+                           will be embedding; may also be passed as a
+                           string, similar to relation fields
+
+    TODO: Make sure to delegate all signals and other field methods to
+          the embedded instance (not just pre_save, get_db_prep_* and
+          to_python).
+    """
+    def __init__(self, *args, **kwargs):
+        self.included_fields = kwargs.pop('include_fields', None)
+        self.excluded_fields = kwargs.pop('exclude_fields', None)
+        super(PartialEmbeddedModelField, self).__init__(*args, **kwargs)
+
+    def _get_init_and_skip_fields(self, model):
+        field_names = set(f.name for f in model._meta.fields)
+        include = field_names
+        # Start with all the fields and reduce to included_fields, if defined
+        if self.included_fields:
+            include = include.intersection(self.included_fields)
+        # Take the remaining fields and exclude the excluded_fields, if defined
+        if self.excluded_fields:
+            include = include - self.excluded_fields
+
+        # Add the pk because it is required
+        include.add(model._meta.pk.name)
+
+        init_fields = [field.attname for field in model._meta.fields
+                                     if field.name in include]
+        return init_fields, field_names - set(init_fields)
+
+    def to_python(self, value):
+        """
+        Passes embedded model fields' values through embedded fields
+        to_python methods and reinstantiates the embedded instance.
+
+        We expect to receive a field.attname => value dict together
+        with a model class from back-end database deconversion (which
+        needs to know fields of the model beforehand).
+        """
+        # Either the model class has already been determined during
+        # deconverting values from the database or we've got a dict
+        # from a deserializer that may contain model class info.
+        if isinstance(value, tuple):
+            embedded_model, attribute_values = value
+        elif isinstance(value, dict):
+            embedded_model = self.stored_model(value)
+            attribute_values = value
+        else:
+            return value
+
+        init_fields, skip = self._get_init_and_skip_fields(embedded_model)
+
+        # Build a data set from the attribute values to initialize the
+        # EmbeddedModel with
+        filtered_values = {}
+        for attname, value in attribute_values.iteritems():
+            # If we have the data already stored, no point deferring it
+            if attname in skip:
+                skip.remove(attname)
+            filtered_values[attname] = \
+                    embedded_model._meta.get_field_by_name(attname)[0]\
+                                        .to_python(value)
+
+        # This builds a model -class- with the appropriate fields deferred
+        model_cls = deferred_class_factory(embedded_model, skip)
+
+        import pdb; pdb.set_trace()
+
+        # Create the model instance.
+        # Note: the double underline is not a typo -- this lets the
+        # model know that the object already exists in the database.
+        return model_cls(__entity_exists=True, **filtered_values)
 
 
 class BlobField(models.Field):
