@@ -1,4 +1,4 @@
-# All fields except for BlobField written by Jonas Haag <jonas@lophus.org>
+from collections import Iterable
 
 from django.core.exceptions import ValidationError
 from django.utils.importlib import import_module
@@ -272,7 +272,6 @@ class EmbeddedModelField(models.Field):
     def get_internal_type(self):
         return 'EmbeddedModelField'
 
-
     def _set_model(self, model):
         """
         Resolves embedded model class once the field knows the model it
@@ -356,6 +355,24 @@ class EmbeddedModelField(models.Field):
         # model know that the object already exists in the database.
         return embedded_model(__entity_exists=True, **attribute_values)
 
+    def _get_field_values_for_save(self, embedded_instance, connection):
+        """Apply pre_save and get_db_prep_save of embedded instance
+        fields, create the field => value mapping to be passed to
+        storage preprocessing.
+        """
+        field_values = {}
+        add = not embedded_instance._entity_exists
+        for field in embedded_instance._meta.fields:
+            value = field.get_db_prep_save(
+                field.pre_save(embedded_instance, add), connection=connection)
+
+            # Exclude unset primary keys (e.g. {'id': None}).
+            if field.primary_key and value is None:
+                continue
+
+            field_values[field] = value
+        return field_values
+
     def get_db_prep_save(self, embedded_instance, connection):
         """
         Applies pre_save and get_db_prep_save of embedded instance
@@ -382,17 +399,8 @@ class EmbeddedModelField(models.Field):
         # Apply pre_save and get_db_prep_save of embedded instance
         # fields, create the field => value mapping to be passed to
         # storage preprocessing.
-        field_values = {}
-        add = not embedded_instance._entity_exists
-        for field in embedded_instance._meta.fields:
-            value = field.get_db_prep_save(
-                field.pre_save(embedded_instance, add), connection=connection)
-
-            # Exclude unset primary keys (e.g. {'id': None}).
-            if field.primary_key and value is None:
-                continue
-
-            field_values[field] = value
+        field_values = self._get_field_values_for_save(embedded_instance,
+                                                       connection)
 
         # Let untyped fields store model info alongside values.
         # We use fake RawFields for additional values to avoid passing
@@ -441,6 +449,13 @@ class PartialEmbeddedModelField(EmbeddedModelField):
     def __init__(self, *args, **kwargs):
         self.included_fields = kwargs.pop('include_fields', None)
         self.excluded_fields = kwargs.pop('exclude_fields', None)
+        if self.included_fields is not None and not \
+                isinstance(self.included_fields, Iterable):
+            raise TypeError("'include_fields' must be iterable or None.")
+        if self.excluded_fields is not None and not \
+                isinstance(self.excluded_fields, Iterable):
+            raise TypeError("'exclude_fields' must be iterable or None.")
+
         super(PartialEmbeddedModelField, self).__init__(*args, **kwargs)
 
     def _get_init_and_skip_fields(self, model):
@@ -451,7 +466,7 @@ class PartialEmbeddedModelField(EmbeddedModelField):
             include = include.intersection(self.included_fields)
         # Take the remaining fields and exclude the excluded_fields, if defined
         if self.excluded_fields:
-            include = include - self.excluded_fields
+            include = include.difference(self.excluded_fields)
 
         # Add the pk because it is required
         include.add(model._meta.pk.name)
@@ -482,6 +497,13 @@ class PartialEmbeddedModelField(EmbeddedModelField):
 
         init_fields, skip = self._get_init_and_skip_fields(embedded_model)
 
+        # If there are any fields in the init_fields that are not in the DB,
+        # we will defer them. Note: Alternatively, we could have queried for
+        # them; however, if this was a member of a queryset, then that could
+        # be a lot of queries, so we take the conservative route instead.
+        extra_skips = set(f for f in init_fields if f not in attribute_values)
+        skip.update(extra_skips)
+
         # Build a data set from the attribute values to initialize the
         # EmbeddedModel with
         filtered_values = {}
@@ -496,12 +518,35 @@ class PartialEmbeddedModelField(EmbeddedModelField):
         # This builds a model -class- with the appropriate fields deferred
         model_cls = deferred_class_factory(embedded_model, skip)
 
-        import pdb; pdb.set_trace()
-
         # Create the model instance.
         # Note: the double underline is not a typo -- this lets the
         # model know that the object already exists in the database.
         return model_cls(__entity_exists=True, **filtered_values)
+
+    def _get_field_values_for_save(self, embedded_instance, connection):
+        """Apply pre_save and get_db_prep_save of embedded instance
+        fields, create the field => value mapping to be passed to
+        storage preprocessing.
+        This will prevent undesired fields from being saved.
+        """
+        init_fields, skip = self._get_init_and_skip_fields(embedded_instance)
+
+        field_values = {}
+        add = not embedded_instance._entity_exists
+        for field in embedded_instance._meta.fields:
+            # If the field is not desired, we'll skip saving it
+            if field.attname not in init_fields:
+                continue
+
+            value = field.get_db_prep_save(
+                field.pre_save(embedded_instance, add), connection=connection)
+
+            # Exclude unset primary keys (e.g. {'id': None}).
+            if field.primary_key and value is None:
+                continue
+
+            field_values[field] = value
+        return field_values
 
 
 class BlobField(models.Field):
