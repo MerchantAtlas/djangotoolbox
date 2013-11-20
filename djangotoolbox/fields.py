@@ -3,11 +3,13 @@ from collections import Iterable
 from django.core.exceptions import ValidationError
 from django.utils.importlib import import_module
 from django.db import models
+from django.db.models import signals
 from django.db.models.fields.subclassing import Creator
 from django.db.models.query_utils import (DeferredAttribute,
                                           deferred_class_factory)
 from django.db.utils import IntegrityError
 from django.db.models.fields.related import add_lazy_relation
+from django.dispatch import dispatcher
 
 
 __all__ = ('RawField', 'ListField', 'SetField', 'DictField',
@@ -428,6 +430,9 @@ class EmbeddedModelField(models.Field):
             value = value.as_lookup_value(self, lookup_type, connection)
         return value
 
+# This is a cache to store the deferred model classes so we don't have to
+# build them over-and-over again, wasting resources.
+_pemf_model_cache = {}
 
 class PartialEmbeddedModelField(EmbeddedModelField):
     """
@@ -516,7 +521,7 @@ class PartialEmbeddedModelField(EmbeddedModelField):
                                         .to_python(value)
 
         # This builds a model -class- with the appropriate fields deferred
-        model_cls = deferred_class_factory(embedded_model, skip)
+        model_cls = self._build_model_class(embedded_model, skip)
 
         # Create the model instance.
         # Note: the double underline is not a typo -- this lets the
@@ -547,6 +552,68 @@ class PartialEmbeddedModelField(EmbeddedModelField):
 
             field_values[field] = value
         return field_values
+
+    def _build_model_class(self, embedded_model, skip):
+        """Build the Deferred model class and cache it.
+
+        If the models has already been built, and is cached, use the cache.
+        The cache structure is as follows:
+        { (<model app>, <model name>): { <ordered skip fields>:
+                                                    <deferred_model> }}
+        """
+        # Try to collect the model from the cache
+        model_key = (embedded_model._meta.app_label, embedded_model.__name__)
+        cache_key = tuple(sorted(skip))
+        if model_key in _pemf_model_cache:
+            model_cache = _pemf_model_cache[model_key]
+            if cache_key in model_cache:
+                return model_cache[cache_key]
+
+        # If there was a cache miss, build the model class
+        # Build the deferred (partial) model
+        model_cls = deferred_class_factory(embedded_model, skip)
+
+        # Add the signals that are attached to the regular model into the
+        # new deferred model.
+        live_signals = self._get_live_signals(embedded_model)
+        for signal, receiver, weak in live_signals:
+            signal.connect(receiver, sender=model_cls, weak=weak)
+
+        # Setup the cache if needed.
+        if model_key not in _pemf_model_cache:
+            _pemf_model_cache[model_key] = {}
+
+        # Attach the deferred model to the cache.
+        _pemf_model_cache[model_key][cache_key] = model_cls
+        return model_cls
+
+    def _get_live_signals(self, embedded_model):
+        """Get all signals that are connected to the embedded model
+
+        :returns: tuple of the following: (<signal>,
+                                           <signal function (receiver)>,
+                                           <weak reference>)
+        """
+        live_signals = []
+        # Iterate over all known signals. This is pretty specific, and
+        # will need to be made more generic in the future
+        for signal in [signals.class_prepared, signals.pre_init,
+                       signals.post_init, signals.pre_save, signals.post_save,
+                       signals.pre_delete, signals.post_delete,
+                       signals.post_syncdb, signals.m2m_changed]:
+            # Find the embedded model in the signals and save them
+            for (receiverkey, r_senderkey), receiver in signal.receivers:
+                if r_senderkey == id(embedded_model):
+                    if isinstance(receiver, dispatcher.WEAKREF_TYPES):
+                        # Dereference the weak reference.
+                        receiver = receiver()
+                        if receiver is None:
+                            continue
+                        weak = True
+                    else:
+                        weak = False
+                    live_signals.append((signal, receiver, weak))
+        return live_signals
 
 
 class BlobField(models.Field):
