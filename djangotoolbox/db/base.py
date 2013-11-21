@@ -351,7 +351,6 @@ class NonrelDatabaseOperations(BaseDatabaseOperations):
 
         Note: lookup values never get deconverted.
         """
-
         # We did not convert Nones.
         if value is None:
             return None
@@ -482,7 +481,6 @@ class NonrelDatabaseOperations(BaseDatabaseOperations):
                                           subkind, db_subtype))
                 for key, subvalue in value)
         else:
-
             # Generator yielding deconverted items.
             value = (
                 self._value_from_db(subvalue, subfield,
@@ -491,10 +489,11 @@ class NonrelDatabaseOperations(BaseDatabaseOperations):
 
             # The value will be available from the field without any
             # further processing and it has to have the right type.
-            if field_kind == 'ListField':
+            if field_kind in ('ListField', 'SetField'):
+                # This could be an embedded model dict, so we can't cast it
+                # to a set. Instead, leave it how it is in the DB, and let
+                # the SetField sort it out.
                 return list(value)
-            elif field_kind == 'SetField':
-                return set(value)
 
             # A new field kind? Maybe it can take a generator.
             return value

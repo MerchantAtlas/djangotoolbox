@@ -108,7 +108,10 @@ class AbstractIterableField(models.Field):
 
         Overriden by DictField to only apply the function to values.
         """
-        return self._type(function(element, *args, **kwargs)
+        type_override = kwargs.pop('type_override', None)
+        # Allow the type to be overridden. This is utilized by SetField
+        type_ = type_override or self._type
+        return type_(function(element, *args, **kwargs)
                           for element in iterable)
 
     def to_python(self, value):
@@ -228,6 +231,18 @@ class SetField(AbstractIterableField):
         """
         return list(self._get_val_from_obj(obj))
 
+    def get_db_prep_save(self, value, connection):
+        """
+        Applies get_db_prep_save of item_field on value items.
+        We cast the set into a list before saving, so we can save unhashable
+        types, like an Embedded Model.
+        """
+        if value is None:
+            return None
+        return self._map(self.item_field.get_db_prep_save, value,
+                         type_override=list,
+                         connection=connection)
+
 
 class DictField(AbstractIterableField):
     """
@@ -297,7 +312,6 @@ class EmbeddedModelField(models.Field):
             add_lazy_relation(model, self, self.embedded_model, _resolve_lookup)
 
     model = property(lambda self: self._model, _set_model)
-
 
     def stored_model(self, column_values):
         """
