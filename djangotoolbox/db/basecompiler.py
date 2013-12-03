@@ -509,6 +509,18 @@ class NonrelCompiler(SQLCompiler):
             field_ordering.append((opts.get_field(name), ascending))
         return field_ordering
 
+    def _get_update_values(self):
+        values = []
+        for field, _, value in self.query.values:
+            if hasattr(value, 'prepare_database_save'):
+                value = value.prepare_database_save(field)
+            else:
+                value = field.get_db_prep_save(value,
+                                               connection=self.connection)
+            value = self.ops.value_for_db(value, field)
+            values.append((field, value))
+        return values
+
 
 class NonrelInsertCompiler(NonrelCompiler):
     """
@@ -571,15 +583,7 @@ class NonrelInsertCompiler(NonrelCompiler):
 class NonrelUpdateCompiler(NonrelCompiler):
 
     def execute_sql(self, result_type):
-        values = []
-        for field, _, value in self.query.values:
-            if hasattr(value, 'prepare_database_save'):
-                value = value.prepare_database_save(field)
-            else:
-                value = field.get_db_prep_save(value,
-                                               connection=self.connection)
-            value = self.ops.value_for_db(value, field)
-            values.append((field, value))
+        values = self._get_update_values()
         return self.update(values)
 
     def update(self, values):
