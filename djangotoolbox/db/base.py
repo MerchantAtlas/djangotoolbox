@@ -489,11 +489,10 @@ class NonrelDatabaseOperations(BaseDatabaseOperations):
 
             # The value will be available from the field without any
             # further processing and it has to have the right type.
-            if field_kind in ('ListField', 'SetField'):
-                # This could be an embedded model dict, so we can't cast it
-                # to a set. Instead, leave it how it is in the DB, and let
-                # the SetField sort it out.
+            if field_kind == 'ListField':
                 return list(value)
+            elif field_kind == 'SetField':
+                return set(value)
 
             # A new field kind? Maybe it can take a generator.
             return value
@@ -567,10 +566,11 @@ class NonrelDatabaseOperations(BaseDatabaseOperations):
         # Let untyped fields determine the embedded instance's model.
         embedded_model = field.stored_model(value)
 
-        # Deconvert fields' values and prepare a dict that can be used
+        # Deconvert fields' values and prepare a tuple that can be used
         # to initialize a model (by changing keys from columns to
-        # attribute names).
-        return embedded_model, dict(
+        # attribute names). We use a tuple instead of dict here so it can
+        # be stored in a SetField too.
+        return embedded_model, tuple(
             (subfield.attname, self._value_from_db(
                 value[subfield.column], *self._convert_as(subfield)))
             for subfield in embedded_model._meta.fields

@@ -359,6 +359,10 @@ class EmbeddedModelField(models.Field):
         else:
             return value
 
+        # DB should return values as a tuple of key/value pairs
+        if isinstance(attribute_values, tuple):
+            attribute_values = dict(attribute_values)
+
         # Pass values through respective fields' to_python, leaving
         # fields for which no value is specified uninitialized.
         attribute_values = dict(
@@ -513,6 +517,10 @@ class PartialEmbeddedModelField(EmbeddedModelField):
             attribute_values = value
         else:
             return value
+
+        # DB should return values as a tuple of key/value pairs
+        if isinstance(attribute_values, tuple):
+            attribute_values = dict(attribute_values)
 
         init_fields, skip = self._get_init_and_skip_fields(embedded_model)
 
