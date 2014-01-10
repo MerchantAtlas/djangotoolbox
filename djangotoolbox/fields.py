@@ -482,8 +482,7 @@ class PartialEmbeddedModelField(EmbeddedModelField):
         super(PartialEmbeddedModelField, self).__init__(*args, **kwargs)
 
     def _get_init_and_skip_fields(self, model):
-        field_names = set(f.name for f in model._meta.fields)
-        include = field_names
+        include = set(f.name for f in model._meta.fields)
         # Start with all the fields and reduce to included_fields, if defined
         if self.included_fields:
             include = include.intersection(self.included_fields)
@@ -494,9 +493,14 @@ class PartialEmbeddedModelField(EmbeddedModelField):
         # Add the pk because it is required
         include.add(model._meta.pk.name)
 
-        init_fields = [field.attname for field in model._meta.fields
-                                     if field.name in include]
-        return init_fields, field_names - set(init_fields)
+        init_fields = []
+        skip_fields = []
+        for field in model._meta.fields:
+            if field.name in include:
+                init_fields.append(field.attname)
+            else:
+                skip_fields.append(field.attname)
+        return init_fields, set(skip_fields)
 
     def to_python(self, value):
         """
