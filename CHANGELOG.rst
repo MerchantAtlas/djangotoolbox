@@ -1,7 +1,17 @@
 Changelog
 =========
 
-Version 0.9.X
+Version 1.5.0
+-------------
+
+* Added support for Django 1.5
+
+Version 1.4.0
+-------------
+
+* Added support for Django 1.4
+
+Version 0.9.2
 -------------
 
 * Moved all code required for value conversion for / deconversion from
