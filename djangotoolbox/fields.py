@@ -138,6 +138,7 @@ class AbstractIterableField(models.Field):
             value)
 
     def get_db_prep_save(self, value, connection):
+
         """
         Applies get_db_prep_save of item_field on value items.
         """
@@ -381,7 +382,7 @@ class EmbeddedModelField(models.Field):
         storage preprocessing.
         """
         field_values = {}
-        add = not embedded_instance._entity_exists
+        add = embedded_instance._state.adding
         for field in embedded_instance._meta.fields:
             value = field.get_db_prep_save(
                 field.pre_save(embedded_instance, add), connection=connection)
@@ -419,22 +420,8 @@ class EmbeddedModelField(models.Field):
         # Apply pre_save and get_db_prep_save of embedded instance
         # fields, create the field => value mapping to be passed to
         # storage preprocessing.
-#<<<<<<< HEAD
-#        field_values = {}
-#        add = embedded_instance._state.adding
-#        for field in embedded_instance._meta.fields:
-#            value = field.get_db_prep_save(
-#                field.pre_save(embedded_instance, add), connection=connection)
-#
-#            # Exclude unset primary keys (e.g. {'id': None}).
-#            if field.primary_key and value is None:
-#                continue
-#
-#            field_values[field] = value
-#=======
         field_values = self._get_field_values_for_save(embedded_instance,
                                                        connection)
-#>>>>>>> toolbox-1.3
 
         # Let untyped fields store model info alongside values.
         # We use fake RawFields for additional values to avoid passing
@@ -566,7 +553,10 @@ class PartialEmbeddedModelField(EmbeddedModelField):
         # Create the model instance.
         # Note: the double underline is not a typo -- this lets the
         # model know that the object already exists in the database.
-        return model_cls(__entity_exists=True, **filtered_values)
+
+        instance = model_cls(**filtered_values)
+        instance._state.adding = False
+        return instance
 
     def _get_field_values_for_save(self, embedded_instance, connection):
         """Apply pre_save and get_db_prep_save of embedded instance
@@ -577,7 +567,7 @@ class PartialEmbeddedModelField(EmbeddedModelField):
         init_fields, skip = self._get_init_and_skip_fields(embedded_instance)
 
         field_values = {}
-        add = not embedded_instance._entity_exists
+        add = embedded_instance._state.adding
         for field in embedded_instance._meta.fields:
             # If the field is not desired, we'll skip saving it
             if field.attname not in init_fields:
