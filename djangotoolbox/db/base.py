@@ -345,7 +345,6 @@ class NonrelDatabaseOperations(BaseDatabaseOperations):
 
         Note: lookup values never get deconverted.
         """
-
         # We did not convert Nones.
         if value is None:
             return None
@@ -476,7 +475,6 @@ class NonrelDatabaseOperations(BaseDatabaseOperations):
                                           subkind, db_subtype))
                 for key, subvalue in value)
         else:
-
             # Generator yielding deconverted items.
             value = (
                 self._value_from_db(subvalue, subfield,
@@ -562,10 +560,11 @@ class NonrelDatabaseOperations(BaseDatabaseOperations):
         # Let untyped fields determine the embedded instance's model.
         embedded_model = field.stored_model(value)
 
-        # Deconvert fields' values and prepare a dict that can be used
+        # Deconvert fields' values and prepare a tuple that can be used
         # to initialize a model (by changing keys from columns to
-        # attribute names).
-        return embedded_model, dict(
+        # attribute names). We use a tuple instead of dict here so it can
+        # be stored in a SetField too.
+        return embedded_model, tuple(
             (subfield.attname, self._value_from_db(
                 value[subfield.column], *self._convert_as(subfield)))
             for subfield in embedded_model._meta.fields
